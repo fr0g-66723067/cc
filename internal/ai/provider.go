@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 )
 
 // Provider defines the interface for AI code generation services
