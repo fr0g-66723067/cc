@@ -76,44 +76,101 @@ You can provide your Claude API key in one of the following ways:
 
 ## Usage
 
-### Initialize a New Project
+Code Controller offers three ways to interact with your projects:
+
+1. Traditional CLI commands (backward compatible)
+2. Hierarchical command structure
+3. Interactive shell mode
+
+### Traditional CLI Commands (Legacy)
+
 ```bash
 cc init my-project
-```
-
-### Generate Implementations
-```bash
 cc generate "Create a web app to track daily tasks"
-```
-
-With specific frameworks:
-```bash
-cc generate "Create a web app to track daily tasks" --frameworks react,vue,svelte
-```
-
-### List Generated Implementations
-```bash
 cc list implementations
-```
-
-### Select an Implementation
-```bash
 cc select implementation-branch-name
-```
-
-### Add a Feature
-```bash
 cc feature "Add a dark mode toggle"
-```
-
-### Compare Implementations
-```bash
 cc compare branch1 branch2
+cc status
+cc remove project project-name
+cc rename implementation old-branch-name new-branch-name
 ```
 
-### Show Project Status
+### Hierarchical Command Structure
+
+The hierarchical command structure organizes commands by resource type:
+
 ```bash
+# Projects Commands
+cc projects list
+cc projects create my-project "Project description"
+cc projects remove my-project
+cc projects rename old-name new-name
+
+# Implementations Commands
+cc implementations list
+cc implementations generate "Create a web app" --frameworks react,vue
+cc implementations select branch-name
+cc implementations remove branch-name
+cc implementations rename old-branch new-branch
+cc implementations compare branch1 branch2
+
+# Features Commands
+cc features list
+cc features add "Add dark mode toggle"
+cc features remove feature-branch
+cc features rename old-feature-branch new-feature-branch
+```
+
+### Context Navigation
+
+CC maintains a navigation context that remembers which project, implementation, and feature you're working with:
+
+```bash
+# Switch between projects, implementations, and features
+cc use project my-project
+cc use implementation impl-react-123456
+cc use feature feat-darkmode-123456
+
+# Show current context and status
 cc status
+```
+
+### Interactive Shell Mode
+
+For a more interactive experience, use the shell mode:
+
+```bash
+cc shell
+```
+
+The shell provides:
+- Tab completion for commands and resources
+- Context-aware prompts showing your location
+- Command history
+- Path-based navigation similar to a filesystem
+
+Shell commands include:
+
+```
+# Context navigation
+pwd                                   # Show current context path
+cd /projects/my-project               # Navigate to a project
+cd implementations/impl-react-123456  # Navigate to an implementation
+cd /                                  # Return to root level
+
+# Resource management
+projects list
+projects create my-new-project "Description"
+implementations generate "Create a login page" --frameworks=react,vue
+features add "Add password reset"
+
+# Using resources
+use project my-project
+use implementation impl-react-123456
+
+# Show status
+status
 ```
 
 ## Project Structure
@@ -172,6 +229,11 @@ go test ./internal/container -v
 - Git branch management for implementations and features
 - Docker container lifecycle management
 - Testing infrastructure with mock providers
+- Project, implementation, and feature management (creation, listing, removal, renaming)
+- Hierarchical command structure with resource-specific subcommands
+- Interactive shell mode with tab completion and context navigation
+- Context-aware filesystem-like navigation for resources
+- Comprehensive test suite for shell and navigation functionality
 
 ## Remaining Limitations
 - Advanced Git operations (merging, rebasing) not yet implemented
@@ -191,6 +253,10 @@ go test ./internal/container -v
 - Implement advanced Git operations like merging branches
 - Add support for private Docker registries
 - Implement project templates and framework-specific configurations
+- Add shell history persistence across sessions
+- Improve shell tab completion with more intelligent suggestions
+- Add alias commands for common operations
+- Enhance error messages with context-specific suggestions
 
 ### Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.

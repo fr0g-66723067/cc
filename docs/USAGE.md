@@ -30,7 +30,15 @@ The typical workflow with CC follows these steps:
 4. **Add features**: Incrementally add features to your selected implementation
 5. **Compare implementations**: Compare different approaches as needed
 
-## Command Reference
+## Interaction Methods
+
+Code Controller offers three ways to interact with your projects:
+
+1. **Traditional CLI Commands** - The original command structure (backward compatible)
+2. **Hierarchical Command Structure** - Commands organized by resource type (projects, implementations, features)
+3. **Interactive Shell Mode** - A shell-like interface with tab completion and context navigation
+
+## Traditional Command Reference
 
 ### Initialize a Project
 
@@ -111,6 +119,115 @@ This command:
 - Displays information about the active project
 - Shows all implementations and their features
 - Indicates which implementation is currently selected
+- Shows your current context path in the hierarchy
+
+### Remove Resources
+
+```bash
+cc remove project project-name
+cc remove implementation impl-branch-name
+cc remove feature feat-branch-name
+```
+
+This command:
+- Removes the specified project, implementation, or feature
+- For projects: removes the project from the configuration
+- For implementations: removes the implementation from the project
+- For features: removes the feature from the implementation
+
+### Rename Resources
+
+```bash
+cc rename project old-name new-name
+cc rename implementation old-branch-name new-branch-name
+cc rename feature old-feature-branch new-feature-branch
+```
+
+This command:
+- Renames the specified project, implementation, or feature
+- For projects: updates the project name and directory
+- For implementations: creates a new Git branch with the new name
+- For features: creates a new Git branch with the new name
+
+## Hierarchical Command Structure
+
+The hierarchical command structure organizes commands by resource type:
+
+```bash
+# Projects Commands
+cc projects list
+cc projects create my-project "Project description"
+cc projects remove my-project
+cc projects rename old-name new-name
+
+# Implementations Commands
+cc implementations list
+cc implementations generate "Create a web app" --frameworks=react,vue
+cc implementations select branch-name
+cc implementations remove branch-name
+cc implementations rename old-branch new-branch
+cc implementations compare branch1 branch2
+
+# Features Commands
+cc features list
+cc features add "Add dark mode toggle"
+cc features remove feature-branch
+cc features rename old-feature-branch new-feature-branch
+```
+
+### Context Navigation
+
+CC maintains a navigation context that remembers which project, implementation, and feature you're working with:
+
+```bash
+# Switch between projects, implementations, and features
+cc use project my-project
+cc use implementation impl-react-123456
+cc use feature feat-darkmode-123456
+
+# Show current context and status
+cc status
+```
+
+## Interactive Shell Mode
+
+For a more interactive experience, use the shell mode:
+
+```bash
+cc shell
+```
+
+The shell provides:
+- Tab completion for commands and resources
+- Context-aware prompts showing your location
+- Command history
+- Path-based navigation similar to a filesystem
+
+Shell commands include:
+
+```
+# Context navigation
+pwd                                   # Show current context path
+cd /projects/my-project               # Navigate to a project
+cd implementations/impl-react-123456  # Navigate to an implementation
+cd /                                  # Return to root level
+
+# Resource management
+projects list
+projects create my-new-project "Description"
+implementations generate "Create a login page" --frameworks=react,vue
+features add "Add password reset"
+
+# Using resources
+use project my-project
+use implementation impl-react-123456
+
+# Show status
+status
+
+# Exit the shell
+exit
+```
 
 ## Advanced Usage
 
@@ -124,7 +241,7 @@ cc --config /path/to/config.json [command]
 
 ### Working with Multiple Projects
 
-CC supports managing multiple projects. Use `cc list projects` to see all projects, and switch between them by initializing or selecting implementations in different projects.
+CC supports managing multiple projects. Use `cc list projects` to see all projects, and switch between them by using the `use project` command or navigating through the hierarchical structure.
 
 ## Integrating with Git
 
@@ -152,3 +269,30 @@ If you encounter issues, check the following:
 1. Make sure Docker is running if you're using Docker as the container provider
 2. Verify that you have the required permissions for the project directory
 3. Check if Claude Code CLI is properly installed and accessible
+4. Try reloading configuration with `cc use project <your-project>` if projects don't appear correctly
+5. If resources don't update properly, try exiting and restarting the shell
+6. Check your current context with `pwd` in shell mode or `cc status` to ensure you're in the right context
+
+## Running Tests
+
+The Code Controller comes with a comprehensive test suite covering all major functionality:
+
+```bash
+# Run all tests
+go test ./...
+
+# Run specific package tests
+go test ./cmd/cc/test -v   # Test shell and command functionality
+go test ./pkg/config -v    # Test context navigation
+go test ./pkg/models -v    # Test model functionality
+
+# Run tests with coverage report
+go test ./... -cover
+
+# Run specific tests by name
+go test -v ./... -run TestShellContextNavigation
+```
+
+## Development and Extension
+
+The hierarchical command structure and shell mode can be easily extended with new commands. The shell handles tab completion and command parsing automatically, making it easy to add new features.
