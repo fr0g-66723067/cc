@@ -25,7 +25,7 @@ type Provider struct {
 func NewProvider(config map[string]string) (*Provider, error) {
 	// Set default frameworks if not specified
 	frameworks := []string{
-		"react", "vue", "svelte", "angular", 
+		"react", "vue", "svelte", "angular",
 		"nextjs", "nuxt", "express", "fastify",
 		"django", "flask", "spring", "rails",
 	}
@@ -108,9 +108,9 @@ func (p *Provider) GenerateProject(ctx context.Context, description string) (str
 	}
 
 	// Log the generation output
-	fmt.Printf("Claude generation complete. Output summary:\n%s\n", 
+	fmt.Printf("Claude generation complete. Output summary:\n%s\n",
 		truncateString(output, 500))
-	
+
 	return output, nil
 }
 
@@ -151,6 +151,22 @@ func (p *Provider) GenerateImplementation(ctx context.Context, description strin
 		return "", fmt.Errorf("failed to create workspace directory: %w", err)
 	}
 
+	// Set permissions separately
+	chmodCmd := []string{"chmod", "777", workspacePath}
+	_, err = p.containerProvider.ExecuteCommand(ctx, p.containerID, chmodCmd)
+	if err != nil {
+		fmt.Printf("Warning: Failed to set workspace permissions: %v\n", err)
+	}
+
+	// Verify workspace directory was created and has correct permissions
+	lsCmd := []string{"ls", "-la", "/"}
+	lsOutput, err := p.containerProvider.ExecuteCommand(ctx, p.containerID, lsCmd)
+	if err != nil {
+		fmt.Printf("Warning: Failed to list root directory: %v\n", err)
+	} else {
+		fmt.Printf("Root directory contents:\n%s\n", lsOutput)
+	}
+
 	// Execute command in container with proper Claude Code CLI arguments
 	fmt.Printf("Generating %s implementation for: %s\n", framework, description)
 	cmd := []string{"claude", "code", "generate", "--output", workspacePath, prompt}
@@ -160,7 +176,7 @@ func (p *Provider) GenerateImplementation(ctx context.Context, description strin
 	}
 
 	// Log the generation output
-	fmt.Printf("Claude generation complete. Output summary:\n%s\n", 
+	fmt.Printf("Claude generation complete. Output summary:\n%s\n",
 		truncateString(output, 500))
 
 	return output, nil
@@ -193,7 +209,21 @@ func (p *Provider) AddFeature(ctx context.Context, codeDir string, description s
 
 	// Copy files to container
 	fmt.Printf("Copying project files from %s to container...\n", localPath)
-	if err := p.containerProvider.CopyFilesToContainer(ctx, p.containerID, localPath, containerPath); err != nil {
+	// Use absolute path for source
+	absLocalPath, err := filepath.Abs(localPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path for local directory: %w", err)
+	}
+
+	// Make sure the target directory exists and has correct permissions
+	mkdirCmd := []string{"mkdir", "-p", containerPath, "&&", "chmod", "755", containerPath}
+	_, err = p.containerProvider.ExecuteCommand(ctx, p.containerID, mkdirCmd)
+	if err != nil {
+		fmt.Printf("Warning: Failed to prepare container directory: %v\n", err)
+	}
+
+	// Now copy files
+	if err := p.containerProvider.CopyFilesToContainer(ctx, p.containerID, absLocalPath, containerPath); err != nil {
 		return "", fmt.Errorf("failed to copy files to container: %w", err)
 	}
 
@@ -229,13 +259,44 @@ func (p *Provider) AddFeature(ctx context.Context, codeDir string, description s
 	}
 
 	// Log the changes that Claude made
-	fmt.Printf("Claude made the following changes:\n%s\n", 
+	fmt.Printf("Claude made the following changes:\n%s\n",
 		truncateString(output, 500))
 
 	// Copy files back from container
 	fmt.Printf("Copying modified files back from container to %s...\n", localPath)
-	if err := p.containerProvider.CopyFilesFromContainer(ctx, p.containerID, containerPath, localPath); err != nil {
+	// Make sure all files in the container have the right permissions
+	chmodCmd := []string{"find", containerPath, "-type", "f", "-exec", "chmod", "644", "{}", ";"}
+	_, err = p.containerProvider.ExecuteCommand(ctx, p.containerID, chmodCmd)
+	if err != nil {
+		fmt.Printf("Warning: Failed to set file permissions in container: %v\n", err)
+	}
+
+	// Create target directory if it doesn't exist
+	absLocalPath, pathErr := filepath.Abs(localPath)
+	if pathErr != nil {
+		return "", fmt.Errorf("failed to get absolute path for local directory: %w", pathErr)
+	}
+
+	if err := os.MkdirAll(absLocalPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create local directory: %w", err)
+	}
+
+	// Copy files back
+	if err := p.containerProvider.CopyFilesFromContainer(ctx, p.containerID, containerPath, absLocalPath); err != nil {
 		return "", fmt.Errorf("failed to copy files from container: %w", err)
+	}
+
+	// List the files that were copied
+	files, err := os.ReadDir(absLocalPath)
+	if err != nil {
+		fmt.Printf("Warning: Failed to list copied files: %v\n", err)
+	} else {
+		fmt.Printf("Copied %d files/directories from container\n", len(files))
+		if len(files) < 10 {
+			for _, file := range files {
+				fmt.Printf(" - %s\n", file.Name())
+			}
+		}
 	}
 
 	return output, nil
@@ -278,7 +339,7 @@ func (p *Provider) AnalyzeCode(ctx context.Context, codeDir string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("failed to list files in container: %w", err)
 	}
-	fmt.Printf("Files in container for analysis:\n%s\n", 
+	fmt.Printf("Files in container for analysis:\n%s\n",
 		truncateString(lsOutput, 200))
 
 	// Create prompt for Claude
@@ -336,7 +397,7 @@ func (p *Provider) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-// ensureContainer ensures a container is running
+// ensureContainer ensures a container is running with proper authentication
 func (p *Provider) ensureContainer(ctx context.Context) error {
 	if p.containerID != "" {
 		// Check if container is still running
@@ -346,6 +407,7 @@ func (p *Provider) ensureContainer(ctx context.Context) error {
 			// Container is still running
 			return nil
 		}
+		fmt.Printf("Container with ID %s is no longer available, recreating...\n", p.containerID)
 		// If we get here, the container is no longer available
 		p.containerID = ""
 	}
@@ -353,37 +415,103 @@ func (p *Provider) ensureContainer(ctx context.Context) error {
 	// Get container image
 	image := p.config["claude_image"]
 	if image == "" {
-		// Use local mock image if available, otherwise fall back to official image
-		mockImage := "claude-code-mock:latest"
-		// Check if mock image exists
-		checkImageCmd := exec.Command("docker", "images", "-q", mockImage)
-		output, err := checkImageCmd.Output()
-		if err == nil && len(output) > 0 {
-			image = mockImage
-			fmt.Printf("Using local mock Claude Code image: %s\n", mockImage)
+		// Check if image is set in environment
+		envImage := os.Getenv("CLAUDE_CODE_IMAGE")
+		if envImage != "" {
+			image = envImage
+			fmt.Printf("Using Claude Code image from environment: %s\n", image)
 		} else {
-			image = "anthropic/claude-code:latest"
-			fmt.Printf("Local mock image not found, trying to use: %s\n", image)
+			// Get absolute path to the Dockerfile in our project
+			exePath, err := os.Executable()
+			if err != nil {
+				fmt.Printf("Warning: Failed to get executable path: %v\n", err)
+				exePath = "."
+			}
+
+			exeDir := filepath.Dir(exePath)
+			// Check for project-local image first
+			localImage := "claude-code:latest"
+
+			// Try to build the image if not present
+			buildScript := filepath.Join(exeDir, "claude", "build.sh")
+			if _, err := os.Stat(buildScript); err == nil {
+				fmt.Println("Found build script, attempting to build Claude Code image...")
+				buildCmd := exec.Command("/bin/bash", buildScript)
+				buildOutput, buildErr := buildCmd.CombinedOutput()
+				if buildErr != nil {
+					fmt.Printf("Warning: Failed to build image: %v\n%s\n", buildErr, buildOutput)
+				} else {
+					fmt.Printf("Successfully built Claude Code image\n")
+					image = localImage
+				}
+			} else {
+				// No build script, try to check if our image exists
+				checkImageCmd := exec.Command("docker", "images", "-q", localImage)
+				output, err := checkImageCmd.Output()
+				if err == nil && len(output) > 0 {
+					image = localImage
+					fmt.Printf("Using local Claude Code image: %s\n", localImage)
+				} else {
+					// Fall back to the official image
+					image = "anthropic/claude-code:latest"
+					fmt.Printf("Local image not found, trying to use: %s\n", image)
+				}
+			}
 		}
 	}
 
 	// Create a persistent temporary directory for workspace
-	tmpDir := filepath.Join("/tmp", fmt.Sprintf("claude-%d", time.Now().UnixNano()))
+	// Use a more reliable path that works across different environments
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		userHome = "/tmp"
+		fmt.Printf("Failed to get user home directory, using /tmp instead: %v\n", err)
+	}
+
+	tmpDir := filepath.Join(userHome, ".cc", "workspace", fmt.Sprintf("claude-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
+	fmt.Printf("Created workspace directory: %s\n", tmpDir)
 
-	// Set up volume mounts
+	// Set up volume mounts - ensure absolute paths
 	volumeMounts := make(map[string]string)
-	volumeMounts[tmpDir] = "/workspace"
+	absoluteTmpDir, err := filepath.Abs(tmpDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for workspace directory: %w", err)
+	}
+	volumeMounts[absoluteTmpDir] = "/workspace"
 
 	// Set up environment variables
 	env := make(map[string]string)
-	// Add Claude API key if provided
-	if apiKey, ok := p.config["claude_api_key"]; ok && apiKey != "" {
-		env["CLAUDE_API_KEY"] = apiKey
+
+	// Get the API key but don't include it directly in environment variables
+	// We'll use a .env file for security
+	apiKey := ""
+	apiKeyFound := false
+
+	// First, check config
+	if configKey, ok := p.config["claude_api_key"]; ok && configKey != "" {
+		apiKey = configKey
+		fmt.Println("Using Claude API key from config")
+		apiKeyFound = true
 	}
-	
+
+	// If not in config, try environment variables
+	if !apiKeyFound {
+		envKey := os.Getenv("CLAUDE_API_KEY")
+		if envKey != "" {
+			apiKey = envKey
+			fmt.Println("Using Claude API key from environment variables")
+			apiKeyFound = true
+		}
+	}
+
+	// If no API key found by this point, return an error
+	if !apiKeyFound {
+		return fmt.Errorf("no Claude API key provided. Set the CLAUDE_API_KEY environment variable or add it to your configuration")
+	}
+
 	// Add any other environment variables from config
 	for k, v := range p.config {
 		if strings.HasPrefix(k, "env_") {
@@ -392,9 +520,10 @@ func (p *Provider) ensureContainer(ctx context.Context) error {
 	}
 
 	// Ensure environment has minimum required variables
-	env["CLAUDE_CLI_LOG_LEVEL"] = "info"  // Set logging level
+	env["CLAUDE_CLI_LOG_LEVEL"] = "info" // Set logging level
+	env["HOME"] = "/home/node"           // Ensure HOME is set correctly for Claude CLI
 
-	// Run container with restart policy to ensure it stays running
+	// Run container
 	fmt.Printf("Starting Claude container with image: %s\n", image)
 	containerID, err := p.containerProvider.RunContainer(ctx, image, volumeMounts, env)
 	if err != nil {
@@ -403,10 +532,88 @@ func (p *Provider) ensureContainer(ctx context.Context) error {
 
 	p.containerID = containerID
 	fmt.Printf("Claude container started with ID: %s\n", containerID)
-	
+
+	// Create a temporary .env file
+	envFile := filepath.Join(tmpDir, ".env")
+	envContent := fmt.Sprintf("CLAUDE_API_KEY=%s\n", apiKey)
+
+	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
+		fmt.Printf("Warning: Failed to write .env file: %v\n", err)
+	} else {
+		fmt.Println("Created temporary .env file with API key")
+	}
+
+	// Copy the .env file to the container root
+	// First try to use our helper script
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		helperScript := filepath.Join(exeDir, "claude", "env-handler.sh")
+
+		if _, err := os.Stat(helperScript); err == nil {
+			fmt.Println("Using env-handler.sh to copy .env to container")
+			copyCmd := exec.Command("/bin/bash", helperScript, "copy-env", containerID, envFile)
+			copyOutput, copyErr := copyCmd.CombinedOutput()
+			if copyErr != nil {
+				fmt.Printf("Warning: Failed to copy .env file using helper: %v\n%s\n", copyErr, copyOutput)
+			} else {
+				fmt.Printf("Successfully copied .env file to container\n")
+			}
+		}
+	}
+
 	// Wait a moment for container to initialize
 	time.Sleep(2 * time.Second)
-	
+
+	// Verify that the container can load .env
+	loadEnvCmd := []string{"/usr/local/bin/load-env", "&&", "env", "|", "grep", "CLAUDE"}
+	loadEnvOutput, _ := p.containerProvider.ExecuteCommand(ctx, containerID, loadEnvCmd)
+	if !strings.Contains(loadEnvOutput, "CLAUDE_API_KEY") {
+		fmt.Printf("Warning: .env file not properly loaded in container\n")
+		fmt.Println("Trying direct environment variable instead...")
+
+		// Try setting environment directly in container
+		setEnvCmd := []string{"bash", "-c", fmt.Sprintf("echo 'export CLAUDE_API_KEY=%s' >> ~/.bashrc && echo 'export CLAUDE_API_KEY=%s' >> ~/.profile", apiKey, apiKey)}
+		_, setEnvErr := p.containerProvider.ExecuteCommand(ctx, containerID, setEnvCmd)
+		if setEnvErr != nil {
+			fmt.Printf("Warning: Failed to set environment variables in container: %v\n", setEnvErr)
+		}
+	}
+
+	// Verify that Claude CLI is working with authentication
+	testCmd := []string{"claude", "code", "--version"}
+	testOutput, testErr := p.containerProvider.ExecuteCommand(ctx, containerID, testCmd)
+	if testErr != nil {
+		fmt.Printf("Warning: Claude CLI test command failed: %v\n", testErr)
+		fmt.Printf("Output: %s\n", testOutput)
+
+		// Try to get more detailed error information
+		errorCmd := []string{"ls", "-la", "/usr/local/bin/claude"}
+		errorOutput, _ := p.containerProvider.ExecuteCommand(ctx, containerID, errorCmd)
+		fmt.Printf("claude executable details: %s\n", errorOutput)
+
+		// Check if the error is due to API key
+		if strings.Contains(testOutput, "API") && strings.Contains(testOutput, "key") {
+			// Try one more approach - copy API key directly into .claude directory
+			setupCmd := []string{"mkdir", "-p", "/home/node/.claude", "&&",
+				"echo", fmt.Sprintf("'{\"api_key\":\"%s\"}'", apiKey), ">", "/home/node/.claude/config.json"}
+			_, setupErr := p.containerProvider.ExecuteCommand(ctx, containerID, setupCmd)
+			if setupErr != nil {
+				fmt.Printf("Warning: Failed to set up config.json: %v\n", setupErr)
+				return fmt.Errorf("authentication failed: invalid or missing API key. Please check your CLAUDE_API_KEY")
+			}
+
+			// Try testing again
+			testOutput, testErr = p.containerProvider.ExecuteCommand(ctx, containerID, testCmd)
+			if testErr != nil {
+				return fmt.Errorf("authentication failed: invalid or missing API key. Please check your CLAUDE_API_KEY")
+			}
+		} else {
+			fmt.Println("Error doesn't appear to be authentication related, continuing anyway, but issues may occur.")
+		}
+	}
+
+	fmt.Printf("Claude CLI is operational: %s\n", strings.TrimSpace(testOutput))
 	return nil
 }
 
@@ -423,4 +630,14 @@ func init() {
 	ai.Register("claude", func(config map[string]string) (ai.Provider, error) {
 		return NewProvider(config)
 	})
+}
+
+// SetContainerProviderForTest allows setting a mock container provider for testing
+// This method is only exported in test builds
+func (p *Provider) SetContainerProviderForTest(containerProvider container.Provider) error {
+	if containerProvider == nil {
+		return fmt.Errorf("container provider cannot be nil")
+	}
+	p.containerProvider = containerProvider
+	return nil
 }

@@ -36,11 +36,29 @@ Code Controller (CC) is an advanced interface built on top of Claude Code CLI th
 - Go 1.21+
 - Docker (for running Claude Code)
 - Git
+- Claude API key (get one from [Anthropic](https://console.anthropic.com/))
 
 ### Installation from Source
 ```bash
 git clone https://github.com/fr0g-66723067/cc.git
 cd cc
+# Run the setup script to build the Docker image and CC tool
+./claude/setup.sh
+```
+
+This setup script will:
+1. Check for your Claude API key in the environment or .env file
+2. Build the Claude Docker image
+3. Build the CC tool
+
+If you prefer to do this manually:
+```bash
+# Build the Claude Docker image
+cd claude
+./build.sh
+
+# Build the CC tool
+cd ..
 go build -o cc ./cmd/cc
 ```
 
@@ -48,6 +66,13 @@ Move the binary to a location in your PATH to use it from anywhere:
 ```bash
 sudo mv cc /usr/local/bin/
 ```
+
+### Setting up your API Key
+
+You can provide your Claude API key in one of the following ways:
+1. Environment variable: `export CLAUDE_API_KEY=your-api-key`
+2. .env file in the project directory or your home directory: `CLAUDE_API_KEY=your-api-key`
+3. Using the `--api-key` flag when running a command: `cc --api-key=your-api-key init my-project`
 
 ## Usage
 
