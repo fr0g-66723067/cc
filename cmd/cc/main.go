@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/user/cc/pkg/config"
+	"github.com/fr0g-66723067/cc/pkg/config"
 )
 
 var configPath string
@@ -42,10 +42,27 @@ func init() {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			projectName := args[0]
+			
+			// Get project description
+			description, _ := cmd.Flags().GetString("description")
+			if description == "" {
+				description = projectName
+			}
+			
 			fmt.Printf("Initializing project: %s\n", projectName)
-			// TODO: Implement project initialization
+			
+			err := executeInitCommand(configPath, projectName, description)
+			if err != nil {
+				fmt.Printf("Error initializing project: %s\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Printf("Project %s initialized successfully\n", projectName)
 		},
 	}
+	
+	// Add flags to init command
+	initCmd.Flags().StringP("description", "d", "", "Project description")
 
 	generateCmd := &cobra.Command{
 		Use:   "generate [description]",
@@ -53,8 +70,24 @@ func init() {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			description := args[0]
+			
+			// Get flags
+			frameworks, _ := cmd.Flags().GetStringSlice("frameworks")
+			count, _ := cmd.Flags().GetInt("count")
+			parallel, _ := cmd.Flags().GetBool("parallel")
+			
 			fmt.Printf("Generating implementations for: %s\n", description)
-			// TODO: Implement generation logic
+			fmt.Printf("Frameworks: %v\n", frameworks)
+			fmt.Printf("Count: %d\n", count)
+			fmt.Printf("Parallel: %v\n", parallel)
+			
+			err := executeGenerateCommand(configPath, description, frameworks, count, parallel)
+			if err != nil {
+				fmt.Printf("Error generating implementations: %s\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Println("Implementations generated successfully")
 		},
 	}
 
@@ -70,7 +103,14 @@ func init() {
 		Run: func(cmd *cobra.Command, args []string) {
 			branch := args[0]
 			fmt.Printf("Selecting implementation: %s\n", branch)
-			// TODO: Implement branch selection
+			
+			err := executeSelectCommand(configPath, branch)
+			if err != nil {
+				fmt.Printf("Error selecting implementation: %s\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Printf("Implementation %s selected successfully\n", branch)
 		},
 	}
 
@@ -81,7 +121,14 @@ func init() {
 		Run: func(cmd *cobra.Command, args []string) {
 			description := args[0]
 			fmt.Printf("Adding feature: %s\n", description)
-			// TODO: Implement feature addition
+			
+			err := executeFeatureCommand(configPath, description)
+			if err != nil {
+				fmt.Printf("Error adding feature: %s\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Println("Feature added successfully")
 		},
 	}
 
@@ -91,19 +138,29 @@ func init() {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			resource := args[0]
-			switch resource {
-			case "projects":
-				fmt.Println("Listing projects")
-				// TODO: List projects
-			case "implementations":
-				fmt.Println("Listing implementations")
-				// TODO: List implementations
-			case "features":
-				fmt.Println("Listing features")
-				// TODO: List features
-			default:
+			
+			if resource != "projects" && resource != "implementations" && resource != "features" {
 				fmt.Printf("Unknown resource type: %s\n", resource)
 				fmt.Println("Valid resources: projects, implementations, features")
+				os.Exit(1)
+			}
+			
+			fmt.Printf("Listing %s\n", resource)
+			
+			items, err := executeListCommand(configPath, resource)
+			if err != nil {
+				fmt.Printf("Error listing %s: %s\n", resource, err)
+				os.Exit(1)
+			}
+			
+			if len(items) == 0 {
+				fmt.Printf("No %s found\n", resource)
+				return
+			}
+			
+			fmt.Printf("%s:\n", resource)
+			for i, item := range items {
+				fmt.Printf("  %d. %s\n", i+1, item)
 			}
 		},
 	}
@@ -116,7 +173,15 @@ func init() {
 			branch1 := args[0]
 			branch2 := args[1]
 			fmt.Printf("Comparing %s and %s\n", branch1, branch2)
-			// TODO: Implement comparison
+			
+			diff, err := executeCompareCommand(configPath, branch1, branch2)
+			if err != nil {
+				fmt.Printf("Error comparing branches: %s\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Println("\nDiff:")
+			fmt.Println(diff)
 		},
 	}
 
@@ -125,7 +190,14 @@ func init() {
 		Short: "Show the current project status",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println("Current project status")
-			// TODO: Implement status display
+			
+			status, err := executeStatusCommand(configPath)
+			if err != nil {
+				fmt.Printf("Error getting status: %s\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Println(status)
 		},
 	}
 

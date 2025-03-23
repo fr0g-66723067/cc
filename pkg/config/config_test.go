@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/fr0g-66723067/cc/pkg/config"
 	"github.com/fr0g-66723067/cc/pkg/models"

@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/fr0g-66723067/cc/internal/vcs"
 	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
@@ -73,11 +72,23 @@ func (p *Provider) Initialize(path string) error {
 		return fmt.Errorf("failed to add README file: %w", err)
 	}
 
+	// Get user name and email from config or use defaults
+	authorName := "Code Controller"
+	authorEmail := "cc@example.com"
+
+	if name, ok := p.config["user.name"]; ok && name != "" {
+		authorName = name
+	}
+
+	if email, ok := p.config["user.email"]; ok && email != "" {
+		authorEmail = email
+	}
+
 	// Commit changes
 	_, err = wt.Commit("Initial commit", &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Code Controller",
-			Email: "cc@example.com",
+			Name:  authorName,
+			Email: authorEmail,
 			When:  time.Now(),
 		},
 	})
@@ -112,12 +123,21 @@ func (p *Provider) CreateBranch(name string, baseBranch string) error {
 		baseRef = ref
 	}
 
-	// Create branch reference
-	refName := plumbing.NewBranchReferenceName(name)
-	ref := plumbing.NewHashReference(refName, baseRef.Hash())
+	// Get worktree to use for branch creation
+	wt, err := p.repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
 
-	// Create branch
-	if err := p.repo.Storer.SetReference(ref); err != nil {
+	// Create branch using the worktree's checkout functionality with 'create' option
+	// This properly creates and tracks the branch in the repo
+	checkoutOpts := &git.CheckoutOptions{
+		Hash:   baseRef.Hash(),
+		Branch: plumbing.NewBranchReferenceName(name),
+		Create: true,
+	}
+	
+	if err := wt.Checkout(checkoutOpts); err != nil {
 		return fmt.Errorf("failed to create branch: %w", err)
 	}
 
@@ -227,11 +247,23 @@ func (p *Provider) CommitChanges(message string) error {
 		return fmt.Errorf("failed to get worktree: %w", err)
 	}
 
+	// Get user name and email from config or use defaults
+	authorName := "Code Controller"
+	authorEmail := "cc@example.com"
+
+	if name, ok := p.config["user.name"]; ok && name != "" {
+		authorName = name
+	}
+
+	if email, ok := p.config["user.email"]; ok && email != "" {
+		authorEmail = email
+	}
+
 	// Commit changes
 	_, err = wt.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Code Controller",
-			Email: "cc@example.com",
+			Name:  authorName,
+			Email: authorEmail,
 			When:  time.Now(),
 		},
 	})

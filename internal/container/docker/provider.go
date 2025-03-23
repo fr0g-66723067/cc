@@ -1,29 +1,29 @@
+// Docker provider implementation
 package docker
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/stdcopy"
+	cccontainer "github.com/fr0g-66723067/cc/internal/container"
 )
 
 // Provider implements the container provider interface for Docker
 type Provider struct {
-	client *client.Client
 	config map[string]string
 }
 
 // NewProvider creates a new Docker provider
 func NewProvider(config map[string]string) (*Provider, error) {
+	if config == nil {
+		config = make(map[string]string)
+	}
+	
 	return &Provider{
 		config: config,
 	}, nil
@@ -32,21 +32,41 @@ func NewProvider(config map[string]string) (*Provider, error) {
 // Initialize sets up the Docker provider
 func (p *Provider) Initialize(ctx context.Context, config map[string]string) error {
 	// Merge configs
-	for k, v := range config {
-		p.config[k] = v
+	if config != nil {
+		for k, v := range config {
+			p.config[k] = v
+		}
 	}
 
-	// Create Docker client
-	var err error
-	p.client, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return fmt.Errorf("failed to create Docker client: %w", err)
+	// Check if sudo should be used
+	useSudo := false
+	if val, ok := p.config["use_sudo"]; ok && val == "true" {
+		useSudo = true
 	}
+	
+	// Set config value for future use
+	p.config["use_sudo"] = fmt.Sprintf("%t", useSudo)
 
-	// Verify Docker connection
-	_, err = p.client.Ping(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to connect to Docker daemon: %w", err)
+	// Check if Docker is installed and running
+	var cmd *exec.Cmd
+	if useSudo {
+		cmd = exec.CommandContext(ctx, "sudo", "docker", "info")
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", "info")
+	}
+	
+	if err := cmd.Run(); err != nil {
+		// If failed without sudo, try with sudo
+		if !useSudo {
+			sudoCmd := exec.CommandContext(ctx, "sudo", "docker", "info")
+			if sudoErr := sudoCmd.Run(); sudoErr == nil {
+				// Docker works with sudo, update config
+				p.config["use_sudo"] = "true"
+				fmt.Println("Docker requires sudo privileges, enabling sudo for Docker commands")
+				return nil
+			}
+		}
+		return fmt.Errorf("Docker is not running or not installed: %w", err)
 	}
 
 	return nil
@@ -54,173 +74,204 @@ func (p *Provider) Initialize(ctx context.Context, config map[string]string) err
 
 // RunContainer starts a container with the given image and returns its ID
 func (p *Provider) RunContainer(ctx context.Context, image string, volumeMounts map[string]string, env map[string]string) (string, error) {
-	// Pull image if needed
-	_, _, err := p.client.ImageInspectWithRaw(ctx, image)
-	if client.IsErrNotFound(err) {
-		// Image doesn't exist, pull it
-		reader, err := p.client.ImagePull(ctx, image, types.ImagePullOptions{})
-		if err != nil {
-			return "", fmt.Errorf("failed to pull image: %w", err)
-		}
-		defer reader.Close()
-
-		// Wait for the pull to complete
-		io.Copy(io.Discard, reader)
-	} else if err != nil {
-		return "", fmt.Errorf("failed to inspect image: %w", err)
-	}
-
-	// Prepare volume mounts
-	var mounts []mount.Mount
-	for hostPath, containerPath := range volumeMounts {
-		// Create host directory if it doesn't exist
-		if err := os.MkdirAll(hostPath, 0755); err != nil {
-			return "", fmt.Errorf("failed to create host directory: %w", err)
-		}
-
-		mounts = append(mounts, mount.Mount{
-			Type:   mount.TypeBind,
-			Source: hostPath,
-			Target: containerPath,
-		})
-	}
-
-	// Prepare environment variables
-	var envVars []string
+	// Build docker run command
+	args := []string{"run", "-d"}
+	
+	// Add environment variables
 	for k, v := range env {
-		envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
-
-	// Create container
-	resp, err := p.client.ContainerCreate(ctx, &container.Config{
-		Image: image,
-		Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
-		Env:   envVars,
-		Tty:   true,
-	}, &container.HostConfig{
-		Mounts: mounts,
-	}, nil, nil, "")
+	
+	// Add volume mounts
+	for host, container := range volumeMounts {
+		args = append(args, "-v", fmt.Sprintf("%s:%s", host, container))
+	}
+	
+	// Add the image and command to keep container running
+	args = append(args, image, "tail", "-f", "/dev/null")
+	
+	// Check if sudo should be used
+	useSudo := p.config["use_sudo"] == "true"
+	
+	// Run the container
+	var cmd *exec.Cmd
+	if useSudo {
+		sudoArgs := append([]string{"docker"}, args...)
+		cmd = exec.CommandContext(ctx, "sudo", sudoArgs...)
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", args...)
+	}
+	
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to create container: %w", err)
+		// If the image doesn't exist, try to pull it
+		if strings.Contains(string(output), "No such image") || strings.Contains(string(output), "not found") {
+			fmt.Printf("Image %s not found, attempting to pull...\n", image)
+			var pullCmd *exec.Cmd
+			if useSudo {
+				pullCmd = exec.CommandContext(ctx, "sudo", "docker", "pull", image)
+			} else {
+				pullCmd = exec.CommandContext(ctx, "docker", "pull", image)
+			}
+			
+			pullOutput, pullErr := pullCmd.CombinedOutput()
+			if pullErr != nil {
+				return "", fmt.Errorf("failed to pull image %s: %w\n%s", image, pullErr, pullOutput)
+			}
+			
+			// Try to run the container again
+			if useSudo {
+				sudoArgs := append([]string{"docker"}, args...)
+				cmd = exec.CommandContext(ctx, "sudo", sudoArgs...)
+			} else {
+				cmd = exec.CommandContext(ctx, "docker", args...)
+			}
+			
+			output, err = cmd.CombinedOutput()
+			if err != nil {
+				return "", fmt.Errorf("failed to run container after pulling image: %w\n%s", err, output)
+			}
+		} else {
+			return "", fmt.Errorf("failed to run container: %w\n%s", err, output)
+		}
 	}
-
-	// Start container
-	if err := p.client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		return "", fmt.Errorf("failed to start container: %w", err)
-	}
-
-	return resp.ID, nil
+	
+	// Get container ID from output
+	containerID := strings.TrimSpace(string(output))
+	fmt.Printf("Container started with ID: %s\n", containerID)
+	
+	return containerID, nil
 }
 
 // ExecuteCommand executes a command in the container
 func (p *Provider) ExecuteCommand(ctx context.Context, containerID string, command []string) (string, error) {
-	// Create exec configuration
-	execConfig := types.ExecConfig{
-		Cmd:          command,
-		AttachStdout: true,
-		AttachStderr: true,
-		Tty:          false,
+	// Build docker exec command
+	args := []string{"exec", containerID}
+	args = append(args, command...)
+	
+	// Check if sudo should be used
+	useSudo := p.config["use_sudo"] == "true"
+	
+	// Execute the command
+	var cmd *exec.Cmd
+	if useSudo {
+		sudoArgs := append([]string{"docker"}, args...)
+		cmd = exec.CommandContext(ctx, "sudo", sudoArgs...)
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", args...)
 	}
-
-	// Create exec instance
-	exec, err := p.client.ContainerExecCreate(ctx, containerID, execConfig)
+	
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to create exec: %w", err)
+		return "", fmt.Errorf("failed to execute command in container: %w\n%s", err, output)
 	}
-
-	// Start exec instance
-	response, err := p.client.ContainerExecAttach(ctx, exec.ID, types.ExecStartCheck{})
-	if err != nil {
-		return "", fmt.Errorf("failed to start exec: %w", err)
-	}
-	defer response.Close()
-
-	// Read output
-	var stdout, stderr strings.Builder
-	if _, err := stdcopy.StdCopy(&stdout, &stderr, response.Reader); err != nil {
-		return "", fmt.Errorf("failed to read exec output: %w", err)
-	}
-
-	// Check if command failed
-	inspect, err := p.client.ContainerExecInspect(ctx, exec.ID)
-	if err != nil {
-		return "", fmt.Errorf("failed to inspect exec: %w", err)
-	}
-
-	if inspect.ExitCode != 0 {
-		return stdout.String(), fmt.Errorf("command failed with exit code %d: %s", inspect.ExitCode, stderr.String())
-	}
-
-	return stdout.String(), nil
+	
+	return string(output), nil
 }
 
 // CopyFilesToContainer copies files from local to container
 func (p *Provider) CopyFilesToContainer(ctx context.Context, containerID string, localPath string, containerPath string) error {
-	// Create tar archive of source directory
-	srcInfo, err := archive.CopyInfoSourcePath(localPath, false)
+	// Verify local path exists
+	if _, err := os.Stat(localPath); os.IsNotExist(err) {
+		return fmt.Errorf("local path does not exist: %s", localPath)
+	}
+	
+	// Check if sudo should be used
+	useSudo := p.config["use_sudo"] == "true"
+	
+	// Use docker cp to copy files
+	var cmd *exec.Cmd
+	if useSudo {
+		cmd = exec.CommandContext(ctx, "sudo", "docker", "cp", localPath, fmt.Sprintf("%s:%s", containerID, containerPath))
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", "cp", localPath, fmt.Sprintf("%s:%s", containerID, containerPath))
+	}
+	
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to get source info: %w", err)
+		return fmt.Errorf("failed to copy files to container: %w\n%s", err, output)
 	}
-
-	srcArchive, err := archive.TarResource(srcInfo)
-	if err != nil {
-		return fmt.Errorf("failed to create tar archive: %w", err)
-	}
-	defer srcArchive.Close()
-
-	// Copy tar archive to container
-	if err := p.client.CopyToContainer(ctx, containerID, containerPath, srcArchive, types.CopyToContainerOptions{
-		AllowOverwriteDirWithFile: true,
-		CopyUIDGID:                false,
-	}); err != nil {
-		return fmt.Errorf("failed to copy to container: %w", err)
-	}
-
+	
 	return nil
 }
 
 // CopyFilesFromContainer copies files from container to local
 func (p *Provider) CopyFilesFromContainer(ctx context.Context, containerID string, containerPath string, localPath string) error {
-	// Get tar archive from container
-	reader, _, err := p.client.CopyFromContainer(ctx, containerID, containerPath)
-	if err != nil {
-		return fmt.Errorf("failed to copy from container: %w", err)
-	}
-	defer reader.Close()
-
 	// Create destination directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
-
-	// Extract tar archive to destination directory
-	if err := archive.Untar(reader, localPath, &archive.TarOptions{
-		NoLchown: true,
-	}); err != nil {
-		return fmt.Errorf("failed to extract tar archive: %w", err)
+	
+	// Check if sudo should be used
+	useSudo := p.config["use_sudo"] == "true"
+	
+	// Use docker cp to copy files
+	var cmd *exec.Cmd
+	if useSudo {
+		cmd = exec.CommandContext(ctx, "sudo", "docker", "cp", fmt.Sprintf("%s:%s", containerID, containerPath), localPath)
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", "cp", fmt.Sprintf("%s:%s", containerID, containerPath), localPath)
 	}
-
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to copy files from container: %w\n%s", err, output)
+	}
+	
+	// Fix permissions if using sudo
+	if useSudo {
+		userInfo, err := user.Current()
+		if err == nil {
+			// Change ownership of the copied files to current user
+			chownCmd := exec.Command("sudo", "chown", "-R", fmt.Sprintf("%s:%s", userInfo.Uid, userInfo.Gid), localPath)
+			if chownErr := chownCmd.Run(); chownErr != nil {
+				fmt.Printf("Warning: Failed to fix permissions on copied files: %v\n", chownErr)
+			}
+		}
+	}
+	
 	return nil
 }
 
 // StopContainer stops a running container
 func (p *Provider) StopContainer(ctx context.Context, containerID string) error {
-	timeout := 10 // 10 seconds
-	if err := p.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
-		return fmt.Errorf("failed to stop container: %w", err)
+	// Check if sudo should be used
+	useSudo := p.config["use_sudo"] == "true"
+	
+	// Stop the container
+	var cmd *exec.Cmd
+	if useSudo {
+		cmd = exec.CommandContext(ctx, "sudo", "docker", "stop", containerID)
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", "stop", containerID)
 	}
-
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to stop container: %w\n%s", err, output)
+	}
+	
 	return nil
 }
 
 // RemoveContainer removes a container
 func (p *Provider) RemoveContainer(ctx context.Context, containerID string) error {
-	if err := p.client.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{
-		Force: true,
-	}); err != nil {
-		return fmt.Errorf("failed to remove container: %w", err)
+	// Check if sudo should be used
+	useSudo := p.config["use_sudo"] == "true"
+	
+	// Remove the container with force
+	var cmd *exec.Cmd
+	if useSudo {
+		cmd = exec.CommandContext(ctx, "sudo", "docker", "rm", "-f", containerID)
+	} else {
+		cmd = exec.CommandContext(ctx, "docker", "rm", "-f", containerID)
 	}
-
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove container: %w\n%s", err, output)
+	}
+	
 	return nil
 }
 
@@ -236,7 +287,7 @@ func (p *Provider) IsRemote() bool {
 
 // Register registers this provider factory
 func init() {
-	container.Register("docker", func(config map[string]string) (container.Provider, error) {
+	cccontainer.Register("docker", func(config map[string]string) (cccontainer.Provider, error) {
 		return NewProvider(config)
 	})
 }

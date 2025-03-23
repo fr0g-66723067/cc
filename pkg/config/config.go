@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/user/cc/pkg/models"
+	"github.com/fr0g-66723067/cc/pkg/models"
 )
 
 // Config stores the application configuration
