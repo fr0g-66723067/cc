@@ -18,15 +18,15 @@ Before using CC, ensure you have:
    cd cc
    ```
 
-2. Run the setup script:
+2. Run the setup script (recommended):
    ```bash
    ./claude/setup.sh
    ```
    
    This script will:
    - Check for and prompt for your Claude API key if needed
-   - Build the Claude Docker image
-   - Build the CC tool
+   - Build the real Claude Docker image (not a mock!)
+   - Build the CC tool with all necessary dependencies
 
 3. Alternatively, you can set up manually:
    ```bash
@@ -46,6 +46,8 @@ Before using CC, ensure you have:
    ```bash
    sudo mv cc /usr/local/bin/
    ```
+   
+All mock implementations have been replaced with real functionality that works with the authentic Claude Code CLI.
 
 ## Basic Usage
 
@@ -131,7 +133,7 @@ cc status
 
 ## Working with the Claude Docker Container
 
-CC manages the Claude Docker container for you, but if you need to interact with it directly:
+CC manages the real Claude Docker container for you, with full support for the Claude Code CLI. If you need to interact with it directly:
 
 ### Building the Container Manually
 
@@ -158,26 +160,38 @@ Once inside the container, you can run Claude commands:
 claude code --version
 ```
 
-### Environment Variables
+### Authentication & Security
 
-CC automatically handles passing your Claude API key to the container. If you need to add other environment variables, you can:
+CC now fully implements secure handling of your Claude API key. It supports:
 
-1. Add them to your `.env` file:
-   ```
-   CLAUDE_API_KEY=your-api-key
-   OTHER_VAR=other-value
-   ```
+1. **Multiple API key sources** (in order of precedence):
+   - Command line flag: `--api-key=your-api-key`
+   - Environment variable: `CLAUDE_API_KEY=your-api-key`
+   - Config file: `~/.cc/config.json`
+   - .env file in the project directory or your home directory
 
-2. Or set them in your configuration file (`~/.cc/config.json`):
-   ```json
-   {
-     "ai": {
-       "config": {
-         "env_OTHER_VAR": "other-value"
+2. **Secure container transfer**:
+   - API key is transferred via .env file, not command line arguments
+   - Multiple fallback mechanisms if .env loading fails
+   - Container-specific environment isolation
+
+3. **Custom environment variables**:
+   You can add other environment variables by:
+   - Adding them to your `.env` file:
+     ```
+     CLAUDE_API_KEY=your-api-key
+     OTHER_VAR=other-value
+     ```
+   - Setting them in your configuration file (`~/.cc/config.json`):
+     ```json
+     {
+       "ai": {
+         "config": {
+           "env_OTHER_VAR": "other-value"
+         }
        }
      }
-   }
-   ```
+     ```
 
 ## Advanced Configuration
 
@@ -228,13 +242,30 @@ If you encounter API key authentication errors:
    cc --api-key=your-api-key status
    ```
 
-3. Verify the key is being passed to the container:
+3. Verify the key is being passed to the container (new feature):
    ```bash
    # Get container ID
+   docker ps | grep claude-code
+   
+   # Check environment in container using the new load-env script
+   docker exec [container-id] /usr/local/bin/load-env
+   ```
+
+4. You can also manually create a .env file:
+   ```bash
+   echo "CLAUDE_API_KEY=your-api-key" > ~/.cc/.env
+   ```
+
+5. Use the new env-handler.sh utility to copy the key to an existing container:
+   ```bash
+   # Get container ID first
    docker ps
    
-   # Check environment in container
-   docker exec [container-id] /usr/local/bin/load-env
+   # Copy .env file to container
+   ./claude/env-handler.sh copy-env [container-id] /path/to/.env
+   
+   # Verify the key is available
+   ./claude/env-handler.sh check-key [container-id]
    ```
 
 ### Docker Issues
